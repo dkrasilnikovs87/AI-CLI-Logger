@@ -1,0 +1,17 @@
+.DS_Store
+*.tar
+*.tar.gz
+*.zip
+
+# Local/exported logs
+terminal-logs/
+*.raw.jsonl
+*.raw.log
+codex-*.md
+gemini-*.md
+claude-*.md
+
+# Temporary files
+*.tmp
+*.bak
+__pycache__/

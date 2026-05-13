@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+HOME = Path.home()
+OUT_DIR = HOME / "terminal-logs" / "ai-cli"
+
+
+def md_escape(text):
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = json.dumps(text, ensure_ascii=False, indent=2)
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def fenced(text, lang="text"):
+    text = md_escape(text)
+    if not text:
+        return ""
+    fence = "```"
+    while fence in text:
+        fence += "`"
+    return f"{fence}{lang}\n{text}\n{fence}"
+
+
+def read_jsonl(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def latest_file(patterns, after=0):
+    files = []
+    for pattern in patterns:
+        files.extend(Path(p) for p in glob.glob(str(pattern), recursive=True))
+    files = [p for p in files if p.is_file() and p.stat().st_mtime >= after]
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_mtime)
+
+
+def content_to_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                typ = item.get("type")
+                if "text" in item:
+                    parts.append(item["text"])
+                elif typ == "tool_result":
+                    parts.append(fenced(item.get("content", ""), "text"))
+                elif "content" in item:
+                    parts.append(md_escape(item["content"]))
+                elif typ:
+                    parts.append(f"[{typ}]")
+        return "\n\n".join(p for p in parts if p)
+    if isinstance(content, dict):
+        return content_to_text([content])
+    return ""
+
+
+def write_md(tool, source, blocks):
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    source_stamp = re.sub(r"[^A-Za-z0-9_.-]+", "-", source.stem)[:80]
+    out_md = OUT_DIR / f"{tool}-{stamp}-{source_stamp}.md"
+    out_raw = OUT_DIR / f"{tool}-{stamp}-{source_stamp}.raw.jsonl"
+    
+    # Write Markdown
+    with open(out_md, "w", encoding="utf-8") as f:
+        f.write(f"# {tool} session\n\n")
+        f.write(f"- Exported: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z')}\n")
+        f.write(f"- Source: `{source}`\n\n")
+        for role, text in blocks:
+            text = md_escape(text)
+            if not text:
+                continue
+            f.write(f"## {role}\n\n{text}\n\n")
+            
+    # Copy raw source
+    try:
+        import shutil
+        shutil.copy2(source, out_raw)
+        print(f"{out_md} (and raw log saved)")
+    except Exception as e:
+        print(f"{out_md} (failed to save raw log: {e})")
+        
+    return out_md
+
+
+def export_codex(path):
+    blocks = []
+    seen = set()
+    meta = None
+    for obj in read_jsonl(path):
+        typ = obj.get("type")
+        payload = obj.get("payload") or {}
+        if typ == "session_meta":
+            meta = payload
+            continue
+        if typ != "response_item":
+            continue
+        if payload.get("type") != "message":
+            continue
+        role = payload.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = content_to_text(payload.get("content"))
+        if role == "user" and text.startswith("<environment_context>"):
+            continue
+        key = (role, text)
+        if text and key not in seen:
+            seen.add(key)
+            blocks.append((role.capitalize(), text))
+    if meta:
+        blocks.insert(0, ("Session", "\n".join(
+            f"- {k}: `{v}`" for k, v in meta.items()
+            if k in ("id", "timestamp", "cwd", "cli_version", "model_provider")
+        )))
+    return write_md("codex", path, blocks)
+
+
+def export_claude(path):
+    blocks = []
+    for obj in read_jsonl(path):
+        typ = obj.get("type")
+        if typ not in ("user", "assistant"):
+            continue
+        msg = obj.get("message") or {}
+        role = msg.get("role") or typ
+        content = msg.get("content")
+        pieces = []
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    pieces.append(md_escape(item))
+                    continue
+                typ2 = item.get("type")
+                if typ2 == "text":
+                    pieces.append(item.get("text", ""))
+                elif typ2 == "tool_use":
+                    name = item.get("name", "tool")
+                    args = item.get("input", {})
+                    pieces.append(f"Tool call: `{name}`\n\n{fenced(args, 'json')}")
+                elif typ2 == "tool_result":
+                    pieces.append(f"Tool result:\n\n{fenced(item.get('content', ''), 'text')}")
+        else:
+            pieces.append(content_to_text(content))
+        text = "\n\n".join(p for p in pieces if p)
+        if text:
+            blocks.append((role.capitalize(), text))
+    return write_md("claude", path, blocks)
+
+
+def gemini_result_text(result):
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        parts = []
+        for item in result:
+            if isinstance(item, dict):
+                fr = item.get("functionResponse") or {}
+                response = fr.get("response") or {}
+                if "output" in response:
+                    parts.append(response["output"])
+                else:
+                    parts.append(md_escape(item))
+            else:
+                parts.append(md_escape(item))
+        return "\n\n".join(parts)
+    return md_escape(result)
+
+
+def export_gemini(path):
+    blocks = []
+    for obj in read_jsonl(path):
+        typ = obj.get("type")
+        if typ == "user":
+            blocks.append(("User", content_to_text(obj.get("content"))))
+        elif typ == "gemini":
+            text = content_to_text(obj.get("content"))
+            tool_bits = []
+            for call in obj.get("toolCalls") or []:
+                name = call.get("displayName") or call.get("name") or "tool"
+                args = call.get("args")
+                result = gemini_result_text(call.get("result"))
+                if args:
+                    tool_bits.append(f"Tool call: `{name}`\n\n{fenced(args, 'json')}")
+                if result:
+                    tool_bits.append(f"Tool result:\n\n{fenced(result, 'text')}")
+            combined = "\n\n".join(p for p in [text, *tool_bits] if p)
+            if combined:
+                blocks.append(("Gemini", combined))
+        elif typ == "info":
+            blocks.append(("Info", content_to_text(obj.get("content"))))
+    return write_md("gemini", path, blocks)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Export native AI CLI session logs to readable Markdown.")
+    parser.add_argument("tool", choices=["codex", "claude", "gemini"])
+    parser.add_argument("--latest", action="store_true")
+    parser.add_argument("--file")
+    parser.add_argument("--after", type=float, default=0)
+    args = parser.parse_args()
+
+    if args.file:
+        path = Path(args.file).expanduser()
+    else:
+        patterns = {
+            "codex": [HOME / ".codex" / "sessions" / "**" / "*.jsonl"],
+            "claude": [HOME / ".claude" / "projects" / "*" / "*.jsonl"],
+            "gemini": [
+                HOME / ".gemini" / "tmp" / "**" / "chats" / "session*.jsonl",
+                HOME / ".gemini" / "history" / "**" / "chats" / "session*.jsonl",
+            ],
+        }[args.tool]
+        path = latest_file(patterns, args.after)
+        if path is None:
+            print(f"No {args.tool} session file found", file=sys.stderr)
+            return 1
+
+    if args.tool == "codex":
+        export_codex(path)
+    elif args.tool == "claude":
+        export_claude(path)
+    elif args.tool == "gemini":
+        export_gemini(path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
