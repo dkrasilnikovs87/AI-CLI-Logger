@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - 2026-05-14
+
+- Sort exported logs by AI CLI tool.
+- Write Codex, Gemini, and Claude logs into separate folders under `~/terminal-logs/ai-cli`.
+
 ## 0.1.0 - 2026-05-14
 
 - Import current AI CLI logging installer and exporter.

@@ -11,6 +11,11 @@ from pathlib import Path
 
 HOME = Path.home()
 OUT_DIR = HOME / "terminal-logs" / "ai-cli"
+TOOL_DIRS = {
+    "codex": "Codex",
+    "claude": "Claude",
+    "gemini": "Gemini",
+}
 
 
 def md_escape(text):
@@ -78,11 +83,12 @@ def content_to_text(content):
 
 
 def write_md(tool, source, blocks):
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    tool_dir = OUT_DIR / TOOL_DIRS.get(tool, tool)
+    tool_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     source_stamp = re.sub(r"[^A-Za-z0-9_.-]+", "-", source.stem)[:80]
-    out_md = OUT_DIR / f"{tool}-{stamp}-{source_stamp}.md"
-    out_raw = OUT_DIR / f"{tool}-{stamp}-{source_stamp}.raw.jsonl"
+    out_md = tool_dir / f"{tool}-{stamp}-{source_stamp}.md"
+    out_raw = tool_dir / f"{tool}-{stamp}-{source_stamp}.raw.jsonl"
     
     # Write Markdown
     with open(out_md, "w", encoding="utf-8") as f:

@@ -20,6 +20,14 @@ By default, exported logs are written to:
 ~/terminal-logs/ai-cli
 ```
 
+Logs are sorted by CLI tool:
+
+```text
+~/terminal-logs/ai-cli/Codex
+~/terminal-logs/ai-cli/Gemini
+~/terminal-logs/ai-cli/Claude
+```
+
 Each export writes a Markdown file and, when possible, a raw copy of the source
 JSONL log.
 
