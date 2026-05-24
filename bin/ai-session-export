@@ -9,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 
 
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]|"
+    r"\][^\x07]*(?:\x07|\x1b\\)|"
+    r"[@-Z\\-_]"
+    r")"
+)
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 HAT_CONTROL_RE = re.compile(r"\^[A-Z@\[\]\\\^_]")
 
@@ -94,7 +100,8 @@ def write_md(tool, source, blocks):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     source_stamp = re.sub(r"[^A-Za-z0-9_.-]+", "-", source.stem)[:80]
     out_md = tool_dir / f"{tool}-{stamp}-{source_stamp}.md"
-    out_raw = tool_dir / f"{tool}-{stamp}-{source_stamp}.raw.jsonl"
+    raw_suffix = source.suffix.lstrip(".") or "log"
+    out_raw = tool_dir / f"{tool}-{stamp}-{source_stamp}.raw.{raw_suffix}"
     
     # Write Markdown
     with open(out_md, "w", encoding="utf-8") as f:
@@ -232,10 +239,172 @@ def strip_ansi(text):
     return ANSI_ESCAPE_RE.sub("", str(text))
 
 
+def replay_terminal_text(text):
+    lines = []
+    line = []
+    col = 0
+    i = 0
+
+    while i < len(text):
+        char = text[i]
+
+        if char == "\x1b":
+            match = ANSI_ESCAPE_RE.match(text, i)
+            if match:
+                sequence = match.group(0)
+                if sequence.endswith("K"):
+                    del line[col:]
+                i = match.end()
+                continue
+
+        if char == "\r":
+            col = 0
+        elif char == "\n":
+            lines.append("".join(line))
+            line = []
+            col = 0
+        elif char == "\b":
+            col = max(0, col - 1)
+        elif CONTROL_CHAR_RE.match(char):
+            pass
+        else:
+            if col == len(line):
+                line.append(char)
+            elif col < len(line):
+                line[col] = char
+            else:
+                line.extend(" " * (col - len(line)))
+                line.append(char)
+            col += 1
+        i += 1
+
+    if line:
+        lines.append("".join(line))
+
+    return "\n".join(lines)
+
+
 def clean_terminal_text(text):
-    cleaned = CONTROL_CHAR_RE.sub("", strip_ansi(text))
+    cleaned = replay_terminal_text(text)
+    cleaned = strip_ansi(cleaned)
     cleaned = HAT_CONTROL_RE.sub("", cleaned)
     return cleaned
+
+
+def collapse_prompt_repaints(lines):
+    collapsed = []
+    pending_prompt = None
+
+    for line in lines:
+        stripped = line.strip()
+        is_prompt = stripped.startswith("❯")
+
+        if is_prompt:
+            pending_prompt = line
+            continue
+
+        if pending_prompt is not None and not stripped:
+            continue
+
+        if pending_prompt is not None:
+            collapsed.append(pending_prompt)
+            pending_prompt = None
+
+        collapsed.append(line)
+
+    if pending_prompt is not None:
+        collapsed.append(pending_prompt)
+
+    return collapsed
+
+
+def collapse_prefix_repaints(lines, prefixes):
+    collapsed = []
+    pending = None
+
+    for line in lines:
+        stripped = line.strip()
+        is_candidate = any(stripped.startswith(prefix) for prefix in prefixes)
+
+        if pending is not None and not stripped:
+            continue
+
+        if is_candidate and pending is not None:
+            pending_text = pending.strip()
+            if stripped.startswith(pending_text) or pending_text.startswith(stripped):
+                pending = line if len(stripped) >= len(pending_text) else pending
+                continue
+
+        if pending is not None:
+            collapsed.append(pending)
+            pending = None
+
+        if is_candidate:
+            pending = line
+        else:
+            collapsed.append(line)
+
+    if pending is not None:
+        collapsed.append(pending)
+
+    return collapsed
+
+
+def collapse_indented_repaints(lines):
+    collapsed = []
+    pending = None
+
+    for line in lines:
+        stripped = line.strip()
+        is_candidate = line.startswith("  ") and stripped
+
+        if pending is not None and not stripped:
+            continue
+
+        if is_candidate and pending is not None:
+            pending_text = pending.strip()
+            if stripped.startswith(pending_text) or pending_text.startswith(stripped):
+                pending = line if len(stripped) >= len(pending_text) else pending
+                continue
+
+        if pending is not None:
+            collapsed.append(pending)
+            pending = None
+
+        if is_candidate:
+            pending = line
+        else:
+            collapsed.append(line)
+
+    if pending is not None:
+        collapsed.append(pending)
+
+    return collapsed
+
+
+def is_abacusai_chrome(line):
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if set(stripped) <= {"─", "~", " "}:
+        return True
+    if "AbacusAI Agent" in stripped:
+        return True
+    if stripped.startswith("? for shortcuts"):
+        return True
+    if stripped.startswith("❯ Try "):
+        return True
+    if stripped in ("❯", "❯ /"):
+        return True
+    if re.fullmatch(r"\d+ tasks? \(\d+ in progress\)", stripped):
+        return True
+    if stripped.startswith("◼ "):
+        return True
+    if stripped == "версии»":
+        return True
+    if stripped in ("▼ (1/17)", "▼ (1/13)", "▼ (1/12)"):
+        return True
+    return False
 
 
 def export_abacusai(path):
@@ -249,20 +418,31 @@ def export_abacusai(path):
         return write_md("abacusai", path, blocks)
 
     transcript = path.read_text(encoding="utf-8", errors="replace")
-    transcript = clean_terminal_text(transcript).replace("\r", "")
+    transcript = clean_terminal_text(transcript)
     lines = []
     for line in transcript.split("\n"):
         stripped = line.strip()
         if not stripped:
+            if lines and lines[-1] != "":
+                lines.append("")
             continue
         if stripped.startswith("Script started on"):
+            continue
+        if stripped.startswith("Script done on"):
             continue
         if stripped.startswith("model:"):
             continue
         if stripped.startswith("Credits used:"):
             continue
+        if "esc/ctrl+c to interrupt" in stripped:
+            continue
+        if is_abacusai_chrome(line):
+            continue
         lines.append(line)
-    transcript = "\n".join(lines).strip()
+    lines = collapse_prompt_repaints(lines)
+    lines = collapse_prefix_repaints(lines, ("● ",))
+    lines = collapse_indented_repaints(lines)
+    transcript = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if transcript:
         blocks.append(("Transcript", transcript))
     return write_md("abacusai", path, blocks)

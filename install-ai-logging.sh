@@ -18,13 +18,25 @@ cp "${SCRIPT_DIR}/bin/ai-session-export" "${BIN_DIR}/"
 chmod +x "${BIN_DIR}/ai-session-export"
 echo "  [+] Copied ai-session-export to ${BIN_DIR}"
 
-# 3. Add Zsh functions to .zshrc if not present
-if ! grep -q "_ai_cli_logged_run" "${ZSHRC}"; then
-  echo "  [+] Adding wrapper functions to ${ZSHRC}"
-  cat << 'EOF' >> "${ZSHRC}"
+# 3. Replace the managed Zsh wrapper block.
+touch "${ZSHRC}"
+if grep -q "# --- AI CLI Auto-Logging Feature ---" "${ZSHRC}"; then
+  tmp_zshrc="$(mktemp)"
+  awk '
+    $0 == "# --- AI CLI Auto-Logging Feature ---" { skip = 1; next }
+    $0 == "# ------------------------------------" && skip { skip = 0; next }
+    !skip { print }
+  ' "${ZSHRC}" > "${tmp_zshrc}"
+  mv "${tmp_zshrc}" "${ZSHRC}"
+  echo "  [+] Replaced wrapper functions in ${ZSHRC}"
+else
+  echo "  [+] Added wrapper functions to ${ZSHRC}"
+fi
+
+cat << 'EOF' >> "${ZSHRC}"
 
 # --- AI CLI Auto-Logging Feature ---
-# Auto-export long AI CLI sessions from each tool's native structured logs.
+# Auto-export AI CLI sessions from native logs or a terminal transcript.
 _ai_cli_logged_run() {
   emulate -L zsh
   setopt localoptions no_aliases
@@ -43,6 +55,7 @@ _ai_cli_logged_run() {
 
   if [[ "$tool" == "abacusai" ]]; then
     transcript_file="${TMPDIR:-/tmp}/abacusai-session-${started_epoch}-$$.log"
+    # AbacusAI history.jsonl currently records prompts only, so capture the PTY.
     script -q "$transcript_file" "$executable" "$@"
     exit_code=$?
     exported_log="$(ai-session-export "$tool" --file "$transcript_file" 2>/dev/null)"
@@ -79,9 +92,6 @@ abacusai() {
 }
 # ------------------------------------
 EOF
-else
-  echo "  [!] Wrapper functions already exist in ${ZSHRC}, skipping."
-fi
 
 echo ""
 echo "Done! The 'ai-cli logging' feature is now ported."

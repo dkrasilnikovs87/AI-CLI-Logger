@@ -3,8 +3,11 @@
 ## Unreleased
 
 - Add AbacusAI wrapper function to installer.
-- Add AbacusAI support to `ai-session-export` using `~/.abacusai/history.jsonl`.
+- Add AbacusAI support to `ai-session-export` using terminal transcripts, since
+  `~/.abacusai/history.jsonl` does not include assistant responses.
 - Export AbacusAI logs into `~/terminal-logs/ai-cli/AbacusAI`.
+- Replace the managed `.zshrc` wrapper block during install instead of skipping
+  already-installed wrappers.
 
 ## 0.2.0 - 2026-05-14
 

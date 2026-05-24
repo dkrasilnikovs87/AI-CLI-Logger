@@ -31,7 +31,8 @@ Logs are sorted by CLI tool:
 ```
 
 Each export writes a Markdown file and, when possible, a raw copy of the source
-JSONL log.
+log. AbacusAI is captured from the terminal transcript because its history file
+currently records prompts without assistant responses.
 
 ## Install
 
