@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add AbacusAI wrapper function to installer.
+- Add AbacusAI support to `ai-session-export` using `~/.abacusai/history.jsonl`.
+- Export AbacusAI logs into `~/terminal-logs/ai-cli/AbacusAI`.
+
 ## 0.2.0 - 2026-05-14
 
 - Sort exported logs by AI CLI tool.

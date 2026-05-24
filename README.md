@@ -11,6 +11,7 @@ CLI and then export the latest native structured session log.
 - Codex
 - Gemini
 - Claude
+- AbacusAI
 
 ## Default output
 
@@ -26,6 +27,7 @@ Logs are sorted by CLI tool:
 ~/terminal-logs/ai-cli/Codex
 ~/terminal-logs/ai-cli/Gemini
 ~/terminal-logs/ai-cli/Claude
+~/terminal-logs/ai-cli/AbacusAI
 ```
 
 Each export writes a Markdown file and, when possible, a raw copy of the source

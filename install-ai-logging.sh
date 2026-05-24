@@ -38,13 +38,21 @@ _ai_cli_logged_run() {
     return 127
   fi
 
-  local started_epoch exit_code exported_log
+  local started_epoch exit_code exported_log transcript_file
   started_epoch="$(date +%s)"
 
-  "$executable" "$@"
-  exit_code=$?
+  if [[ "$tool" == "abacusai" ]]; then
+    transcript_file="${TMPDIR:-/tmp}/abacusai-session-${started_epoch}-$$.log"
+    script -q "$transcript_file" "$executable" "$@"
+    exit_code=$?
+    exported_log="$(ai-session-export "$tool" --file "$transcript_file" 2>/dev/null)"
+    rm -f "$transcript_file"
+  else
+    "$executable" "$@"
+    exit_code=$?
+    exported_log="$(ai-session-export "$tool" --latest --after "$started_epoch" 2>/dev/null)"
+  fi
 
-  exported_log="$(ai-session-export "$tool" --latest --after "$started_epoch" 2>/dev/null)"
   if [[ -n "$exported_log" ]]; then
     print -r -- "Saved ${tool} session log: ${exported_log}"
   else
@@ -64,6 +72,10 @@ gemini() {
 
 claude() {
   _ai_cli_logged_run claude "$HOME/.local/bin/claude" "$@"
+}
+
+abacusai() {
+  _ai_cli_logged_run abacusai "$HOME/.abacusai/bin/abacusai" "$@"
 }
 # ------------------------------------
 EOF

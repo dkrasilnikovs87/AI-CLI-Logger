@@ -9,12 +9,18 @@ from datetime import datetime
 from pathlib import Path
 
 
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+HAT_CONTROL_RE = re.compile(r"\^[A-Z@\[\]\\\^_]")
+
+
 HOME = Path.home()
 OUT_DIR = HOME / "terminal-logs" / "ai-cli"
 TOOL_DIRS = {
     "codex": "Codex",
     "claude": "Claude",
     "gemini": "Gemini",
+    "abacusai": "AbacusAI",
 }
 
 
@@ -220,9 +226,51 @@ def export_gemini(path):
     return write_md("gemini", path, blocks)
 
 
+def strip_ansi(text):
+    if text is None:
+        return ""
+    return ANSI_ESCAPE_RE.sub("", str(text))
+
+
+def clean_terminal_text(text):
+    cleaned = CONTROL_CHAR_RE.sub("", strip_ansi(text))
+    cleaned = HAT_CONTROL_RE.sub("", cleaned)
+    return cleaned
+
+
+def export_abacusai(path):
+    blocks = []
+    if path.name == "history.jsonl":
+        for obj in read_jsonl(path):
+            source = obj.get("source")
+            message = obj.get("message")
+            if source == "cli-repl" and message:
+                blocks.append(("User", message))
+        return write_md("abacusai", path, blocks)
+
+    transcript = path.read_text(encoding="utf-8", errors="replace")
+    transcript = clean_terminal_text(transcript).replace("\r", "")
+    lines = []
+    for line in transcript.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Script started on"):
+            continue
+        if stripped.startswith("model:"):
+            continue
+        if stripped.startswith("Credits used:"):
+            continue
+        lines.append(line)
+    transcript = "\n".join(lines).strip()
+    if transcript:
+        blocks.append(("Transcript", transcript))
+    return write_md("abacusai", path, blocks)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export native AI CLI session logs to readable Markdown.")
-    parser.add_argument("tool", choices=["codex", "claude", "gemini"])
+    parser.add_argument("tool", choices=["codex", "claude", "gemini", "abacusai"])
     parser.add_argument("--latest", action="store_true")
     parser.add_argument("--file")
     parser.add_argument("--after", type=float, default=0)
@@ -238,6 +286,7 @@ def main():
                 HOME / ".gemini" / "tmp" / "**" / "chats" / "session*.jsonl",
                 HOME / ".gemini" / "history" / "**" / "chats" / "session*.jsonl",
             ],
+            "abacusai": [HOME / ".abacusai" / "logs" / "*.log"],
         }[args.tool]
         path = latest_file(patterns, args.after)
         if path is None:
@@ -250,6 +299,8 @@ def main():
         export_claude(path)
     elif args.tool == "gemini":
         export_gemini(path)
+    elif args.tool == "abacusai":
+        export_abacusai(path)
     return 0
 
 
